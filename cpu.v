@@ -56,7 +56,7 @@ case (T)
     ABS:    begin T <= ABS+1; pc <= pc + 1; cursor[ 7:0] <= i_data; end
 
     // Если тут JMP ABS, то обрабатывается отдельно
-    ABS+1:  if (opcode == 8'h6C)
+    ABS+1:  if (opcode == 8'h4C)
             begin T <= RST;   pc <= {i_data, cursor[7:0]}; end
     else    begin T <= IMP;   pc <= pc + 1; cursor[15:8] <= i_data; sel <= 1'b1; end
 
