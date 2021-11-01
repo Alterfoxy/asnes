@@ -23,6 +23,10 @@ case (T)
     // ---------------------------------------------------------------------
     RST: begin
 
+        src <= 1'b0; // acc
+        dst <= 1'b0; // i_data
+        alu <= i_data[7:5];
+
         // Декодирование операнда
         casex (i_data)
         8'bxxx_000_x1: T <= NDX;
@@ -38,7 +42,7 @@ case (T)
         8'b10x_111_1x: T <= ABY;
         8'bxxx_111_xx: T <= ABX;
         8'bxxx_100_00: T <= REL;
-        8'b0xx_010_10: T <= ACC;
+        8'b0xx_010_10: T <= IMP; // ACC
         default:       T <= IMP;
         endcase
 
@@ -82,9 +86,29 @@ case (T)
     REL:    begin end
 
     // Исполнение инструкции
-    IMM, IMP, ACC: begin
+    default:
+    begin
 
+        // Специальный случай (требуется PC+1)
         if (T == IMM) pc <= pc + 1'b1;
+
+        // По умолчанию, редиректит на старт
+        T <= RST;
+
+        casex (opcode)
+
+            // STA x
+            8'b100_xxx_01: case (T)
+
+                IMM, IMP: begin we <= 1'b1; T <= TICK1; o_data <= A; end
+                TICK1:    begin we <= 1'b0; sel <= 1'b0; end
+
+            endcase
+
+            // Стандартное АЛУ
+            8'bxxx_xxx_01: begin A <= alu_r; P <= alu_p; sel <= 1'b0; end
+
+        endcase
 
     end
 
