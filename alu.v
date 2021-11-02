@@ -47,9 +47,9 @@ always @* begin
         /* ROR */ 4'b1011: R = {P[0], B[7:1]};
 
         // Специальные
-        /* BIT */ 4'b1101: R = A & B;
-        /* DEC */ 4'b1110: R = B - 1;
-        /* INC */ 4'b1111: R = B + 1;
+        /* BIT */ 4'b1100: R = A & B;
+        /* DEC */ 4'b1101: R = B - 1;
+        /* INC */ 4'b1110: R = B + 1;
 
     endcase
 
@@ -65,19 +65,8 @@ always @* begin
         /* ASL, ROL */  4'b100x: AF = {sign,        P[6:2], zero,  B[7]};
         /* LSR, ROR */  4'b101x: AF = {sign,        P[6:2], zero,  B[0]};
 
-        // Флаговые
-        4'b1100:
-        casex (opcode[7:5])
-
-            /* CLC */ 3'b00x: AF = {P[7:1], opcode[5]};
-            /* CLI */ 3'b01x: AF = {P[7:3], opcode[5], P[1:0]};
-            /* CLV */ 3'b101: AF = {P[7],   1'b0,      P[5:0]};
-            /* CLD */ 3'b11x: AF = {P[7:4], opcode[5], P[2:0]};
-
-        endcase
-
         // BIT
-        4'b1101: AF = {B[7:6], P[5:2], zero, P[0]};
+        4'b1100: AF = {B[7:6], P[5:2], zero, P[0]};
 
     endcase
 

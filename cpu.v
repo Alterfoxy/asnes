@@ -49,7 +49,20 @@ case (T)
         pc     <= pc + 1'b1;
         opcode <= i_data;
 
+        // Обработка некоторых опкодов
+        casex (i_data)
+        /* CLC */ 8'h18: begin T <= RST; P[0] <= 1'b0; end
+        /* SEC */ 8'h38: begin T <= RST; P[0] <= 1'b1; end
+        /* CLI */ 8'h58: begin T <= RST; P[2] <= 1'b0; end
+        /* SEI */ 8'h78: begin T <= RST; P[2] <= 1'b1; end
+        /* CLV */ 8'hB8: begin T <= RST; P[6] <= 1'b0; end
+        /* CLD */ 8'hD8: begin T <= RST; P[3] <= 1'b0; end
+        /* SED */ 8'hF8: begin T <= RST; P[3] <= 1'b1; end
+        endcase
+
     end
+
+    // -----------------------------------------------------------------
 
     // Извлечение адреса на операнд
     ZP:     begin T <= IMP;   pc <= pc + 1; cursor <= {8'h00, i_data};   sel <= 1'b1; end
@@ -82,8 +95,17 @@ case (T)
     NDY+1:  begin T <= NDY+2; cursor <= cursor8; tmpb <= i_data; end
     NDY+2:  begin T <= IMP;   cursor <= {i_data, tmpb} + Y; end
 
-    // Переход относительный
-    REL:    begin end
+    // Относительный переход
+    REL: begin
+
+        T <= RST;
+        if (condit[ opcode[7:6] ] == opcode[5])
+             pc <= pc + 1'b1 + {{8{i_data[7]}}, i_data[7:0]};
+        else pc <= pc + 1'b1;
+
+    end
+
+    // -----------------------------------------------------------------
 
     // Исполнение инструкции
     default:
@@ -91,9 +113,6 @@ case (T)
 
         // Специальный случай (требуется PC+1)
         if (T == IMM) pc <= pc + 1'b1;
-
-        // По умолчанию, редиректит на старт
-        T <= RST;
 
         casex (opcode)
 
@@ -107,6 +126,9 @@ case (T)
 
             // Стандартное АЛУ
             8'bxxx_xxx_01: begin A <= alu_r; P <= alu_p; sel <= 1'b0; end
+
+            // Неопознанная инструкция
+            default: begin T <= RST; sel <= 1'b0; end
 
         endcase
 
