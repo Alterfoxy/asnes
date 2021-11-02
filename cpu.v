@@ -93,7 +93,7 @@ case (T)
         /* STX */ 8'h86, 8'h8E, 8'h96: src <= 2'h1;
         /* STY */ 8'h84, 8'h8C, 8'h94: src <= 2'h2;
 
-        /* PHP, PHA */
+        // PHP, PHA
         8'h08, 8'h48: begin
 
             sel     <= 1'b1;
@@ -105,18 +105,22 @@ case (T)
 
         end
 
-        /* PLP, PLA */
-        8'h28, 8'h68: begin
+        // PLP, PLA, RTS, RTI
+        8'h28, 8'h68, 8'h60, 8'h40: begin
 
             sel     <= 1'b1;
             cursor  <= {8'h01, sinc};
             S       <= S + 1;
-            alu     <= 4'b0101; // LDA
+            alu     <= 4'b0101; // Это LDA
 
         end
 
         // ASL, ROL, LSR, ROR Memory
         8'b0xx_xxx10: begin alu <= {1'b1, i_data[7:5]}; end
+
+        // BRK действует особым методом
+        8'h00: begin pc <= pc + 2'h2; T <= BRK1; end
+
         endcase
 
     end
@@ -187,10 +191,44 @@ case (T)
     WEND: begin we <= 1'b0; sel <= 1'b0; T <= RST; end
 
     // -----------------------------------------------------------------
+    // Аппаратное прерывание
+    // -----------------------------------------------------------------
 
+    // Сохранить PC
+    BRK1, BRK2: begin
+
+        T       <= (T == BRK1) ? BRK2 : BRK3;
+        o_data  <= (T == BRK1) ? pc[15:8] : pc[7:0];
+        cursor  <= {8'h01, S};
+        S       <= S - 1'b1;
+        sel     <= 1'b1;
+        we      <= 1'b1;
+
+    end
+
+    // Сохранение P
+    BRK3: begin
+
+        T       <= BRK4;
+        o_data  <= {P[7:5], /*B*/ 1'b1, P[3:0]}; // BREAK=1
+        P       <= {P[7:5], /*B*/ 1'b1, P[3], /*I*/ 1'b1, P[1:0]};
+        cursor  <= {8'h01, S};
+        S       <= S - 1'b1;
+        sel     <= 1'b1;
+        we      <= 1'b1;
+
+    end
+
+    // Выборка FFFE
+    BRK4: begin T <= BRK5; sel <= 1'b1; we <= 1'b0; cursor <= 16'hFFFE; end
+    BRK5: begin T <= BRK6; pc[7:0] <= i_data; cursor <= cursor + 1'b1; end
+    BRK6: begin T <= RST;  pc[15:8] <= i_data; sel <= 1'b0; end
+
+    // -----------------------------------------------------------------
     // Исполнение инструкции
-    default:
-    begin
+    // -----------------------------------------------------------------
+
+    default: begin
 
         // Специальный случай (требуется PC+1)
         if (T == IMM) pc <= pc + 1'b1;
@@ -198,15 +236,16 @@ case (T)
         T   <= RST;
         sel <= 1'b0;
 
+        // Разбор опкода
         casex (opcode)
 
-            // ST(A|X|Y)
+            // Сохранение в память
             8'b100_xxx_01,       // STA
             8'h84, 8'h8C, 8'h94, // STX
             8'h86, 8'h8E, 8'h96: // STY
             begin T <= WEND; we <= 1'b1; sel <= 1'b1; o_data <= src_mux; end
 
-            // ASL, LSR, ROL, ROR Imm; DEC|INC
+            // Для ASL, LSR, ROL, ROR Imm; DEC|INC
             8'b0xx_xxx_10, // Сдвиговые
             8'b11x_xx1_10: // INC|DEC
             begin T <= WEND; we <= 1'b1; sel <= 1'b1; o_data <= alu_r; P <= alu_r;  end
@@ -236,6 +275,45 @@ case (T)
 
             end
 
+            // RTI
+            8'h40: case (T)
+
+                // Прочесть P
+                IMP, TCK1: begin
+
+                    cursor  <= {8'h01, sinc};
+                    S       <= S + 1;
+                    sel     <= 1'b1;
+
+                    T <= (T == IMP) ? TCK1 : TCK2;
+                    if (T == IMP) P <= i_data; else pc[7:0] <= i_data;
+
+                end
+
+                // Читать старший байт
+                TCK2: begin pc <= {i_data, pc[7:0]}; end
+
+            endcase
+
+            // RTS
+            8'h60: case (T)
+
+                // Читать младший байт
+                IMP: begin
+
+                    T       <= TCK1;
+                    pc[7:0] <= i_data;
+                    cursor  <= {8'h01, sinc};
+                    S       <= S + 1;
+                    sel     <= 1'b1;
+
+                end
+
+                // Читать старший байт, PC+1
+                TCK1: begin pc <= {i_data, pc[7:0]} + 1'b1; end
+
+            endcase
+
             // LDX, LDY
             8'hA2, 8'hA6, 8'hAE, 8'hB6, 8'hBE: begin X <= alu_r; P <= alu_p; end
             8'hA0, 8'hA4, 8'hAC, 8'hB4, 8'hBC: begin Y <= alu_r; P <= alu_p; end
@@ -247,9 +325,6 @@ case (T)
             // PLP, PLA
             8'h28: begin P <= alu_r; end
             8'h68: begin A <= alu_r; P <= alu_p; end
-
-            // Неопознанная инструкция
-            default: begin sel <= 1'b0; end
 
         endcase
 
