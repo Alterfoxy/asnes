@@ -23,8 +23,7 @@ case (T)
     // ---------------------------------------------------------------------
     RST: begin
 
-        src <= 1'b0; // acc
-        dst <= 1'b0; // i_data
+        src <= 1'b0; // ACC
         alu <= i_data[7:5];
 
         // Декодирование операнда
@@ -70,17 +69,51 @@ case (T)
         /* TXS */ 8'h9A: begin T <= RST; S <= X; end
         /* NOP */ 8'hEA, 8'h1A, 8'h3A, 8'h5A, 8'h7A, 8'hDA, 8'hFA: T <= RST;
 
+        // Инкремент и декремент
+        /* DEY */ 8'h88: begin Y <= dey; P <= {dey[7], P[6:2], dey==0, P[0]}; end
+        /* INY */ 8'hC8: begin Y <= iny; P <= {iny[7], P[6:2], iny==0, P[0]}; end
+        /* DEX */ 8'hCA: begin X <= dex; P <= {dex[7], P[6:2], dex==0, P[0]}; end
+        /* INX */ 8'hE8: begin X <= inx; P <= {inx[7], P[6:2], inx==0, P[0]}; end
+
         // Выбор АЛУ
         /* LDXY*/ 8'hA0, 8'hA4, 8'hAC, 8'hB4, 8'hBC,
                   8'hA2, 8'hA6, 8'hAE, 8'hB6, 8'hBE: alu <= /* LDA */ 4'b0101;
-        /* CPX */ 8'hE0, 8'hE4, 8'hEC: begin alu <= /* CMP */ 4'b0110; src <= 2'h1; end
-        /* CPY */ 8'hC0, 8'hC4, 8'hCC: begin alu <= /* CMP */ 4'b0110; src <= 2'h2; end
+        /* CPX */ 8'hE0, 8'hE4, 8'hEC: begin alu <= 4'b0110; src <= /*X*/ 2'h1; end
+        /* CPY */ 8'hC0, 8'hC4, 8'hCC: begin alu <= 4'b0110; src <= /*Y*/ 2'h2; end
+        /* DEC */ 8'hC6, 8'hCE, 8'hD6, 8'hDE: alu <= 4'b1101;
+        /* INC */ 8'hE6, 8'hEE, 8'hF6, 8'hFE: alu <= 4'b1110;
+        /* BIT */ 8'h24, 8'h2C: alu <= 4'b1100;
 
         // Однотактовая работа сдвиговых инструкции
         /* ASL */ 8'h0A: begin A <= {A[6:0], 1'b0}; P <= {A[6], P[6:2],  A[6:0]==0,       A[7]}; T <= RST; end
         /* ROL */ 8'h2A: begin A <= {A[6:0], P[0]}; P <= {A[6], P[6:2], {A[6:0],P[0]}==0, A[7]}; T <= RST; end
         /* LSR */ 8'h4A: begin A <= {1'b0, A[7:1]}; P <= {1'b0, P[6:2],  A[7:1]==0,       A[0]}; T <= RST; end
         /* ROR */ 8'h6A: begin A <= {P[0], A[7:1]}; P <= {P[0], P[6:2], {P[0],A[7:1]}==0, A[0]}; T <= RST; end
+
+        /* STX */ 8'h86, 8'h8E, 8'h96: src <= 2'h1;
+        /* STY */ 8'h84, 8'h8C, 8'h94: src <= 2'h2;
+
+        /* PHP, PHA */
+        8'h08, 8'h48: begin
+
+            sel     <= 1'b1;
+            cursor  <= {8'h01, S};
+            S       <= S - 1;
+            we      <= 1'b1;
+            o_data  <= i_data[6] ? A : {P[7:6], 2'b11, P[3:0]};
+            T       <= WEND;
+
+        end
+
+        /* PLP, PLA */
+        8'h28, 8'h68: begin
+
+            sel     <= 1'b1;
+            cursor  <= {8'h01, sinc};
+            S       <= S + 1;
+            alu     <= 4'b0101; // LDA
+
+        end
 
         // ASL, ROL, LSR, ROR Memory
         8'b0xx_xxx10: begin alu <= {1'b1, i_data[7:5]}; end
@@ -96,12 +129,31 @@ case (T)
     ZPY:    begin T <= IMP;   pc <= pc + 1; cursor <= {8'h00, azpy};     sel <= 1'b1; end
 
     // Абсолютный адрес
+    // -----------------------------------------------------------------
     ABS:    begin T <= ABS+1; pc <= pc + 1; cursor[ 7:0] <= i_data; end
+    ABS+1:
+    // JMP ABS
+    if (opcode == 8'h4C) begin
 
-    // Если тут JMP ABS, то обрабатывается отдельно
-    ABS+1:  if (opcode == 8'h4C)
-            begin T <= RST;   pc <= {i_data, cursor[7:0]}; end
+        T  <= RST;
+        pc <= {i_data, cursor[7:0]};
+
+    end
+    // JSR ABS
+    else if (opcode == 8'h20) begin
+
+        T       <= IMP;
+        tmph    <= i_data;      // Старший байт адреса перехода
+        tmpb    <= cursor[7:0]; // Младший известен
+        cursor  <= {8'h01, S};  // Указатель на вершину стека
+        S       <= S - 1'b1;    // Декрементировать S
+        sel     <= 1'b1;        // Выбор памяти для записи
+        we      <= 1'b1;        // Разрешить запись
+        o_data  <= pc[15:8];    // Записать PCH
+
+    end
     else    begin T <= IMP;   pc <= pc + 1; cursor[15:8] <= i_data; sel <= 1'b1; end
+    // -----------------------------------------------------------------
 
     // Абсолютный адрес +X
     ABX:    begin T <= ABX+1; pc <= pc + 1; cursor <= i_data; end
@@ -149,13 +201,40 @@ case (T)
         casex (opcode)
 
             // ST(A|X|Y)
-            8'b100_xxx_01: begin T <= WEND; we <= 1'b1; sel <= 1'b1; o_data <= src_mux; end
+            8'b100_xxx_01,       // STA
+            8'h84, 8'h8C, 8'h94, // STX
+            8'h86, 8'h8E, 8'h96: // STY
+            begin T <= WEND; we <= 1'b1; sel <= 1'b1; o_data <= src_mux; end
 
-            // ASL, LSR, ROL, ROR Imm
-            8'b0xx_xxx_10: begin T <= WEND; we <= 1'b1; sel <= 1'b1; o_data <= alu_r; P <= alu_r;  end
+            // ASL, LSR, ROL, ROR Imm; DEC|INC
+            8'b0xx_xxx_10, // Сдвиговые
+            8'b11x_xx1_10: // INC|DEC
+            begin T <= WEND; we <= 1'b1; sel <= 1'b1; o_data <= alu_r; P <= alu_r;  end
 
             // Стандартное АЛУ. Запись в Acc, если не CMP
             8'bxxx_xxx_01: begin P <= alu_p; if (opcode[7:5] != 3'b110) A <= alu_r; end
+            8'h24, 8'h2C:  begin P <= alu_p; end
+
+            // JMP IND
+            8'h6C: case (T)
+
+                IMP:  begin T  <= TCK1; tmpb <= i_data; sel <= 1'b1; cursor <= {cursor[15:8], cursor8}; end
+                TCK1: begin pc <= {i_data, tmpb}; end
+
+            endcase
+
+            // JSR ABS
+            8'h20: begin
+
+                T       <= WEND;
+                cursor  <= {8'h01, S};
+                S       <= S - 1'b1;
+                sel     <= 1'b1;
+                we      <= 1'b1;
+                o_data  <= pc[7:0];
+                pc      <= {tmph, tmpb};
+
+            end
 
             // LDX, LDY
             8'hA2, 8'hA6, 8'hAE, 8'hB6, 8'hBE: begin X <= alu_r; P <= alu_p; end
@@ -164,6 +243,10 @@ case (T)
             // CPX, CPY
             8'hC0, 8'hC4, 8'hCC,
             8'hE0, 8'hE4, 8'hEC: P <= alu_p;
+
+            // PLP, PLA
+            8'h28: begin P <= alu_r; end
+            8'h68: begin A <= alu_r; P <= alu_p; end
 
             // Неопознанная инструкция
             default: begin sel <= 1'b0; end
