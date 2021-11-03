@@ -4,6 +4,7 @@ module cpu
     input   wire            clock,      // 25 mhz
     input   wire            resetn,     // 1 то работает процессор
     input   wire            locked,     // 1 если разрешено выполнять логику
+    input   wire            intr,       // Счетчик прерываний
     output  wire    [15:0]  address,
     input   wire    [ 7:0]  i_data,
     output  reg     [ 7:0]  o_data,
@@ -15,13 +16,16 @@ assign address = sel ? cursor : pc;
 `include "decl.v"
 
 always @(posedge clock)
-if (resetn == 1'b0) begin pc <= 1'b0; T <= 1'b0; sel <= 1'b0; end
+if (resetn == 1'b0) begin pc <= 1'b0; T <= 1'b0; sel <= 1'b0; P <= 8'h04; end
 else if (locked == 1'b1)
 case (T)
 
     // Маршрутизация опкода
     // ---------------------------------------------------------------------
-    RST: begin
+    RST:
+    // Вызов прерывания, если I=0
+    if ((intr ^ intp) && (P[2] == 1'b0)) begin T <= BRK1; intp <= intr; end
+    else begin
 
         src <= 1'b0; // ACC
         alu <= i_data[7:5];
@@ -147,13 +151,13 @@ case (T)
     else if (opcode == 8'h20) begin
 
         T       <= IMP;
-        tmph    <= i_data;      // Старший байт адреса перехода
-        tmpb    <= cursor[7:0]; // Младший известен
         cursor  <= {8'h01, S};  // Указатель на вершину стека
         S       <= S - 1'b1;    // Декрементировать S
         sel     <= 1'b1;        // Выбор памяти для записи
         we      <= 1'b1;        // Разрешить запись
         o_data  <= pc[15:8];    // Записать PCH
+        tmpb    <= pc[7:0];     // Сохранить PCL
+        pc      <= {i_data, cursor[7:0]};
 
     end
     else    begin T <= IMP;   pc <= pc + 1; cursor[15:8] <= i_data; sel <= 1'b1; end
@@ -181,7 +185,7 @@ case (T)
     REL: begin
 
         T <= RST;
-        if (condit[ opcode[7:6] ] == opcode[5])
+        if (branch[ opcode[7:6] ] == opcode[5])
              pc <= pc + 1'b1 + {{8{i_data[7]}}, i_data[7:0]};
         else pc <= pc + 1'b1;
 
@@ -214,14 +218,12 @@ case (T)
         P       <= {P[7:5], /*B*/ 1'b1, P[3], /*I*/ 1'b1, P[1:0]};
         cursor  <= {8'h01, S};
         S       <= S - 1'b1;
-        sel     <= 1'b1;
-        we      <= 1'b1;
 
     end
 
     // Выборка FFFE
-    BRK4: begin T <= BRK5; sel <= 1'b1; we <= 1'b0; cursor <= 16'hFFFE; end
-    BRK5: begin T <= BRK6; pc[7:0] <= i_data; cursor <= cursor + 1'b1; end
+    BRK4: begin T <= BRK5; we <= 1'b0;         cursor <= 16'hFFFE; end
+    BRK5: begin T <= BRK6; pc[ 7:0] <= i_data; cursor <= cursor + 1'b1; end
     BRK6: begin T <= RST;  pc[15:8] <= i_data; sel <= 1'b0; end
 
     // -----------------------------------------------------------------
@@ -270,8 +272,7 @@ case (T)
                 S       <= S - 1'b1;
                 sel     <= 1'b1;
                 we      <= 1'b1;
-                o_data  <= pc[7:0];
-                pc      <= {tmph, tmpb};
+                o_data  <= tmpb;
 
             end
 
